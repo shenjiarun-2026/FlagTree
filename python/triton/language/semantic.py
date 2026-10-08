@@ -21,12 +21,19 @@
 # SOFTWARE.
 
 from __future__ import annotations  # remove after python 3.11
+import os
 import warnings
 
 from typing import List, Optional, Sequence, Tuple, TypeVar, Generic, Type
 import numbers
 
 from triton.runtime import driver
+
+
+def _backend_keeps_i1_pointers() -> bool:
+    # torch_br stores Bool as 4-byte f32 1.0/0.0. The SUPA load/store lowering
+    # owns that ABI. Rewriting the pointer to i8 here would store one byte.
+    return os.environ.get("FLAGTREE_BACKEND") == "supa"
 
 from .._C.libtriton import ir
 from . import core as tl
@@ -1068,9 +1075,10 @@ class TritonSemantic(Generic[TensorTy]):
         ptr_ty = ptr.type.scalar
         elt_ty = ptr_ty.element_ty
 
-        # Treat `pointer_type<tl.int1>` as `pointer_type<tl.int8>`
+        # Upstream rewrites bool pointers to i8. SUPA keeps i1 so the backend
+        # can use torch_br's 4-byte Bool encoding.
         is_bool = elt_ty == tl.int1
-        if is_bool:
+        if is_bool and not _backend_keeps_i1_pointers():
             elt_ty = tl.int8
             ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
             ptr = self.cast(ptr, ptr_ty)
@@ -1294,8 +1302,8 @@ class TritonSemantic(Generic[TensorTy]):
         ptr_ty = ptr.type.scalar
         elt_ty = ptr_ty.element_ty
 
-        # Treat `pointer_type<tl.int1>` as `pointer_type<tl.int8>`
-        if elt_ty == tl.int1:
+        # See _backend_keeps_i1_pointers. SUPA stores Bool as 4-byte f32 bits.
+        if elt_ty == tl.int1 and not _backend_keeps_i1_pointers():
             elt_ty = tl.int8
             ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
             ptr = self.cast(ptr, ptr_ty)
